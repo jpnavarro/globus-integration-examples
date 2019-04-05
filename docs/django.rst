@@ -10,9 +10,9 @@ First, we will create a virtual environment named ``venv``, activate it to run o
 
 .. code-block:: bash
 
-   $ virtualenv venv
+   $ python3 -m venv venv
    $ . venv/bin/activate
-   $ pip install requests==2.11.1 django social-auth-app-django
+   $ pip install django social-auth-app-django python-jose
 
 In the next step, we create project ‘webapp’ with web application ‘webapp’:
 
@@ -34,18 +34,18 @@ By default, ``django-admin`` creates a web application that does not have any vi
        uuid = None
        access_token = None
        refresh_token = None
-       if request.user.is_authenticated():
+       if request.user.is_authenticated:
            uuid = request.user.social_auth.get(provider='globus').uid
            social = request.user.social_auth
            access_token = social.get(provider='globus').extra_data['access_token']
            refresh_token = social.get(provider='globus').extra_data['refresh_token']
        return render(request,
-                     'home.j2',
+                     'home.html',
                      {'uuid': uuid,
                      'access_token': access_token,
                      'refresh_token': refresh_token})
 
-The view returns Jinja2 template, ``templates/home.j2``, processed by ``render()`` function. 
+The view returns the template, ``templates/home.html``, processed by ``render()`` function. 
 
 .. code-block:: html
 
@@ -72,7 +72,7 @@ The view returns Jinja2 template, ``templates/home.j2``, processed by ``render()
            &nbsp; Access token: {{ access_token }}<br/>
            &nbsp; Refresh token: {{ refresh_token }}<br/>
            <br/>
-           <a href="{% url 'auth:logout' %}?next={{ request.path }}">Logout</a>
+           <a href="{% url 'logout' %}?next={{ request.path }}">Logout</a>
        {% else %}
            <a href="{% url 'social:begin' 'globus' %}?next={{ request.path }}">Login with Globus</a>
        {% endif %}
@@ -84,27 +84,29 @@ The view returns Jinja2 template, ``templates/home.j2``, processed by ``render()
 If a user is authenticated, the page shows a username, email, first name, last name, UUID obtained from Globus Auth, and access token that can be used to call Globus services.
 The template also includes ‘Login with Globus’ and ‘Logout’ links.
 
-To make the ‘home’ view accessible, you need to add a corresponding URL to ``app/app/urls.py``
+To make the ‘home’ view accessible, you need to add a corresponding URL to ``webapp/urls.py``
 
 .. code-block:: python
 
-   from django.conf.urls import url, include
    from django.contrib import admin
+   from django.urls import include, path
    from . import views
 
    urlpatterns = [
-       url(r'^admin/', admin.site.urls),
-       url(r'^$', views.home, name='home'),
-       url(r'', include('django.contrib.auth.urls', namespace='auth')),
-       url(r'', include('social_django.urls', namespace='social')),
+       path('admin/', admin.site.urls),
+       path('', views.home, name='home'),
+       path('', include('django.contrib.auth.urls')),
+       path('', include('social_django.urls', namespace='social')),
    ]
 
-As you probably noticed, another two URL patterns were added. The third one is to enable the ‘Logout’ link. The last one is to support the ‘Login with Globus’ link and other URLs required by OAuth2 protocol. Views corresponding with the two URL patterns are defined by Django and Python Social Auth.
 
-Because Python Social Auth does not come with Globus backend that defines how Python Social Auth should call Globus Auth OAuth2 server and go through the OAuth2 flow, you need to add the backend to your application. The backend is available in the repository, so you only need to copy it to ``app/backends/globus.py`` and create an empty ``__init__.py``.
-In the last step, you need to enable the Python Social Auth middleware in app/settings.py by adding:
+As you probably noticed, another two URL patterns were added. The third one is to enable the ‘Logout’ link. The last one is to support the ‘Login with Globus’ link and other URLs required by OpenID Connect protocol. Views corresponding with the two URL patterns are defined by Django and Python Social Auth.
+
+In the last step, you need to enable the Python Social Auth middleware in webapp/settings.py and by adding:
 
 .. code-block:: python
+
+   ALLOWED_HOSTS = ['*']
 
    INSTALLED_APPS = [
        <snap>
@@ -113,7 +115,7 @@ In the last step, you need to enable the Python Social Auth middleware in app/se
 
    TEMPLATES = [
        {
-           ‘DIRS’: [os.path.join(BASE_DIR, ‘templates’],
+           ‘DIRS’: [os.path.join(BASE_DIR, ‘templates’)],
            ‘OPTIONS’: {
                ‘context_processors’: [
                     <snap>
@@ -123,17 +125,18 @@ In the last step, you need to enable the Python Social Auth middleware in app/se
            }
        }
    ]
-            
+
    AUTHENTICATION_BACKENDS = [
-       'webapp.backends.globus.GlobusOAuth2',
+       'social_core.backends.globus.GlobusOpenIdConnect',
        'django.contrib.auth.backends.ModelBackend',
    ]
    SOCIAL_AUTH_GLOBUS_KEY = '<your_Globus_Auth_Client_ID>'
    SOCIAL_AUTH_GLOBUS_SECRET = '<your_Globus_Auth_Client_Secret>'
-   SOCIAL_AUTH_SANITIZE_REDIRECTS = False
    SOCIAL_AUTH_GLOBUS_AUTH_EXTRA_ARGUMENTS = {
        'access_type': 'offline',
    }
+
+To get OAuth2 client id and secret that you have to provide in the settings.py, register this web app on https://developers.globus.org with `https://<your_server_host_name/<prefix>/complete/globus/` (e.g. `https://example.com/complete/globus/`) as a redirect URL.
 
 After all of the changes are made, you can create the SQLite3 database:
 
@@ -150,7 +153,7 @@ The web app can be run behind an reverse proxy server or executed directly by an
 
 .. code-block:: apache
 
-   WSGIDaemonProcess globusapp user=<your_username> python-path=<your_base_dir>/webapp:<your_base_dir>/venv/lib/python2.7/site-packages
+   WSGIDaemonProcess globusapp user=<your_username> python-path=<your_base_dir>/webapp python-home=<your_base_dir>/venv
    WSGIProcessGroup globusapp
    WSGIScriptAlias /<prefix> <your_base_dir>/webapp/webapp/wsgi.py process-group=globusapp
    <Directory <your_base_dir>/webapp/webapp>
@@ -159,7 +162,7 @@ The web app can be run behind an reverse proxy server or executed directly by an
        </Files>
    </Directory>
 
-After restarting the Apache server, the application should be accessible at https://example.com/<prefix>.
+The `WSGI*` directives are supported by Apache mod_wsgi module. On Debian-based systems the module is provided by `libapache2-mod-wsgi-py3` package. After restarting the Apache server, the application should be accessible at https://example.com/<prefix>.
 
 .. image:: django-images/psa.png
    :width: 75%
